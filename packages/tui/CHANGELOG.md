@@ -7,6 +7,9 @@
 - Changed click counting to use word-level proximity instead of exact column match, so slight mouse drift between clicks still registers multi-clicks.
 - Fixed selection anchor mutating during word/line drag by computing the effective range from the initial word/line boundary.
 - Changed fullscreen mouse selection to keep the highlight visible after release instead of clearing immediately.
+- Fixed hyperlinks not being clickable in fullscreen mode on terminals that gate native link handling while mouse reporting is active (e.g. Ghostty); left-clicking a link now opens it directly.
+
+## [0.7.2] - 2026-08-11
 
 ## [0.7.1] - 2026-08-07
 
