@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Added scope panes to `prime-agent config`: Tab switches between global resources and project-local resources, and `config -l` opens directly in the project pane.
 - Added Mermaid diagram rendering as Unicode box-drawing art in chat messages, with a settings toggle.
 - Added the current working directory to the editor status line.
 - Changed `ctrl+c` to clear the prompt when it has content and no operation is running.

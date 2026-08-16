@@ -3,16 +3,18 @@
  */
 
 import { ProcessTerminal, TUI } from "@earendil-works/pi-tui";
-import type { ResolvedPaths } from "../core/package-manager.js";
+import type { ScopedResolvedPaths } from "../core/package-manager.js";
 import type { SettingsManager } from "../core/settings-manager.js";
-import { ConfigSelectorComponent } from "../modes/interactive/components/config-selector.js";
+import { ConfigSelectorComponent, type ConfigWriteScope } from "../modes/interactive/components/config-selector.js";
 import { initTheme, stopThemeWatcher } from "../modes/interactive/theme/theme.js";
 
 export interface ConfigSelectorOptions {
-	resolvedPaths: ResolvedPaths;
+	resolvedPaths: ScopedResolvedPaths;
 	settingsManager: SettingsManager;
 	cwd: string;
 	agentDir: string;
+	/** Which pane the selector opens in. */
+	writeScope: ConfigWriteScope;
 }
 
 /** Show TUI config selector and return when closed */
@@ -43,6 +45,8 @@ export async function selectConfig(options: ConfigSelectorOptions): Promise<void
 				process.exit(0);
 			},
 			() => ui.requestRender(),
+			ui.terminal.rows,
+			options.writeScope,
 		);
 
 		ui.addChild(selector);

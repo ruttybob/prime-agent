@@ -2,6 +2,7 @@
  * TUI component for managing package resources (enable/disable)
  */
 
+import { homedir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import {
 	type Component,
@@ -15,13 +16,21 @@ import {
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import { CONFIG_DIR_NAME } from "../../../config.js";
-import type { PathMetadata, ResolvedPaths, ResolvedResource } from "../../../core/package-manager.js";
+import type {
+	PathMetadata,
+	ResolvedPaths,
+	ResolvedResource,
+	ScopedResolvedPaths,
+} from "../../../core/package-manager.js";
 import type { PackageSource, SettingsManager } from "../../../core/settings-manager.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
-import { rawKeyHint } from "./keybinding-hints.js";
+import { keyHint, rawKeyHint } from "./keybinding-hints.js";
 
 type ResourceType = "extensions" | "skills" | "prompts" | "themes";
+
+/** Which settings file the selector writes to. */
+export type ConfigWriteScope = "global" | "project";
 
 const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
 	extensions: "Extensions",
@@ -55,7 +64,24 @@ interface ResourceGroup {
 	subgroups: ResourceSubgroup[];
 }
 
-function getGroupLabel(metadata: PathMetadata): string {
+function formatBaseDir(baseDir: string): string {
+	const homeDir = homedir();
+	let displayPath: string;
+
+	if (baseDir === homeDir) {
+		displayPath = "~";
+	} else if (baseDir.startsWith(homeDir)) {
+		// Replace home prefix with ~, normalize separators for display
+		const rest = baseDir.slice(homeDir.length);
+		displayPath = `~${rest.replace(/\\/g, "/")}`;
+	} else {
+		displayPath = baseDir.replace(/\\/g, "/");
+	}
+
+	return displayPath.endsWith("/") ? displayPath : `${displayPath}/`;
+}
+
+function getGroupLabel(metadata: PathMetadata, agentDir: string): string {
 	if (metadata.origin === "package") {
 		return `${metadata.source} (${metadata.scope})`;
 	}
@@ -64,23 +90,28 @@ function getGroupLabel(metadata: PathMetadata): string {
 		return "Built-in";
 	}
 	if (metadata.source === "auto") {
-		return metadata.scope === "user" ? `User (~/${CONFIG_DIR_NAME}/)` : `Project (${CONFIG_DIR_NAME}/)`;
+		if (metadata.baseDir) {
+			return metadata.scope === "user"
+				? `User (${formatBaseDir(metadata.baseDir)})`
+				: `Project (${formatBaseDir(metadata.baseDir)})`;
+		}
+		return metadata.scope === "user" ? `User (${formatBaseDir(agentDir)})` : `Project (${CONFIG_DIR_NAME}/)`;
 	}
 	return metadata.scope === "user" ? "User settings" : "Project settings";
 }
 
-function buildGroups(resolved: ResolvedPaths): ResourceGroup[] {
+function buildGroups(resolved: ResolvedPaths, agentDir: string): ResourceGroup[] {
 	const groupMap = new Map<string, ResourceGroup>();
 
 	const addToGroup = (resources: ResolvedResource[], resourceType: ResourceType) => {
 		for (const res of resources) {
 			const { path, enabled, metadata } = res;
-			const groupKey = `${metadata.origin}:${metadata.scope}:${metadata.source}`;
+			const groupKey = `${metadata.origin}:${metadata.scope}:${metadata.source}:${metadata.baseDir ?? ""}`;
 
 			if (!groupMap.has(groupKey)) {
 				groupMap.set(groupKey, {
 					key: groupKey,
-					label: getGroupLabel(metadata),
+					label: getGroupLabel(metadata, agentDir),
 					scope: metadata.scope,
 					origin: metadata.origin,
 					source: metadata.source,
@@ -158,37 +189,56 @@ type FlatEntry =
 	| { type: "item"; item: ResourceItem };
 
 class ConfigSelectorHeader implements Component {
+	private writeScope: ConfigWriteScope;
+
+	constructor(writeScope: ConfigWriteScope) {
+		this.writeScope = writeScope;
+	}
+
+	setWriteScope(writeScope: ConfigWriteScope): void {
+		this.writeScope = writeScope;
+	}
+
 	invalidate(): void {}
 
 	render(width: number): string[] {
-		const title = theme.bold("Resource Configuration");
+		const title = theme.bold(this.writeScope === "project" ? "Project Local Resources" : "Global Resources");
 		const sep = theme.fg("muted", " · ");
-		const hint = rawKeyHint("space", "toggle") + sep + rawKeyHint("esc", "close");
-		const hintWidth = visibleWidth(hint);
-		const titleWidth = visibleWidth(title);
-		const spacing = Math.max(1, width - titleWidth - hintWidth);
+		const hint =
+			keyHint("tui.input.tab", "switch mode") +
+			sep +
+			rawKeyHint("space", "toggle") +
+			sep +
+			rawKeyHint("esc", "close");
+		const spacing = Math.max(1, width - visibleWidth(title) - visibleWidth(hint));
+		const scopeHint =
+			this.writeScope === "project"
+				? theme.fg("muted", `${CONFIG_DIR_NAME}/settings.json · Tab switches to global resources`)
+				: theme.fg("muted", `~/${CONFIG_DIR_NAME}/settings.json · Tab switches to project resources`);
 
 		return [
 			truncateToWidth(`${title}${" ".repeat(spacing)}${hint}`, width, ""),
-			theme.fg("muted", "Type to filter resources"),
+			truncateToWidth(scopeHint, width, ""),
 		];
 	}
 }
 
 class ResourceList implements Component, Focusable {
-	private groups: ResourceGroup[];
+	private groupsByScope: Record<ConfigWriteScope, ResourceGroup[]>;
 	private flatItems: FlatEntry[] = [];
 	private filteredItems: FlatEntry[] = [];
 	private selectedIndex = 0;
 	private searchInput: Input;
-	private maxVisible = 15;
+	private maxVisible: number;
 	private settingsManager: SettingsManager;
 	private cwd: string;
 	private agentDir: string;
+	private writeScope: ConfigWriteScope;
 
 	public onCancel?: () => void;
 	public onExit?: () => void;
 	public onToggle?: (item: ResourceItem, newEnabled: boolean) => void;
+	public onSwitchMode?: () => void;
 
 	private _focused = false;
 	get focused(): boolean {
@@ -199,14 +249,35 @@ class ResourceList implements Component, Focusable {
 		this.searchInput.focused = value;
 	}
 
-	constructor(groups: ResourceGroup[], settingsManager: SettingsManager, cwd: string, agentDir: string) {
-		this.groups = groups;
+	constructor(
+		groupsByScope: Record<ConfigWriteScope, ResourceGroup[]>,
+		settingsManager: SettingsManager,
+		cwd: string,
+		agentDir: string,
+		terminalHeight?: number,
+		writeScope: ConfigWriteScope = "global",
+	) {
+		this.groupsByScope = groupsByScope;
 		this.settingsManager = settingsManager;
 		this.cwd = cwd;
 		this.agentDir = agentDir;
+		this.writeScope = writeScope;
 		this.searchInput = new Input();
+		// 8 lines of chrome: top spacer + top border + spacer + header (2 lines) + spacer + bottom spacer + bottom border
+		const chrome = 8;
+		this.maxVisible = Math.max(5, (terminalHeight ?? 24) - chrome);
 		this.buildFlatList();
 		this.filteredItems = [...this.flatItems];
+	}
+
+	setWriteScope(writeScope: ConfigWriteScope): void {
+		this.writeScope = writeScope;
+		this.buildFlatList();
+		this.filterItems(this.searchInput.getValue());
+	}
+
+	private get groups(): ResourceGroup[] {
+		return this.groupsByScope[this.writeScope];
 	}
 
 	private buildFlatList(): void {
@@ -401,6 +472,10 @@ class ResourceList implements Component, Focusable {
 			this.onExit?.();
 			return;
 		}
+		if (kb.matches(data, "tui.input.tab")) {
+			this.onSwitchMode?.();
+			return;
+		}
 		if (data === " " || kb.matches(data, "tui.select.confirm")) {
 			const entry = this.filteredItems[this.selectedIndex];
 			if (entry?.type === "item") {
@@ -554,7 +629,9 @@ class ResourceList implements Component, Focusable {
 }
 
 export class ConfigSelectorComponent extends Container implements Focusable {
+	private header: ConfigSelectorHeader;
 	private resourceList: ResourceList;
+	private writeScope: ConfigWriteScope;
 
 	private _focused = false;
 	get focused(): boolean {
@@ -566,35 +643,59 @@ export class ConfigSelectorComponent extends Container implements Focusable {
 	}
 
 	constructor(
-		resolvedPaths: ResolvedPaths,
+		resolvedPaths: ScopedResolvedPaths,
 		settingsManager: SettingsManager,
 		cwd: string,
 		agentDir: string,
 		onClose: () => void,
 		onExit: () => void,
 		requestRender: () => void,
+		terminalHeight?: number,
+		writeScope: ConfigWriteScope = "global",
 	) {
 		super();
 
-		const groups = buildGroups(resolvedPaths);
+		this.writeScope = writeScope;
+		const groupsByScope = {
+			global: buildGroups(resolvedPaths.global, agentDir).filter((group) => group.scope === "user"),
+			project: buildGroups(resolvedPaths.project, agentDir).filter((group) => group.scope === "project"),
+		};
 
 		// Add header
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
 		this.addChild(new Spacer(1));
-		this.addChild(new ConfigSelectorHeader());
+		this.header = new ConfigSelectorHeader(this.writeScope);
+		this.addChild(this.header);
 		this.addChild(new Spacer(1));
 
 		// Resource list
-		this.resourceList = new ResourceList(groups, settingsManager, cwd, agentDir);
+		this.resourceList = new ResourceList(
+			groupsByScope,
+			settingsManager,
+			cwd,
+			agentDir,
+			terminalHeight,
+			this.writeScope,
+		);
 		this.resourceList.onCancel = onClose;
 		this.resourceList.onExit = onExit;
 		this.resourceList.onToggle = () => requestRender();
+		this.resourceList.onSwitchMode = () => {
+			this.switchWriteScope();
+			requestRender();
+		};
 		this.addChild(this.resourceList);
 
 		// Bottom border
 		this.addChild(new Spacer(1));
 		this.addChild(new DynamicBorder());
+	}
+
+	private switchWriteScope(): void {
+		this.writeScope = this.writeScope === "global" ? "project" : "global";
+		this.header.setWriteScope(this.writeScope);
+		this.resourceList.setWriteScope(this.writeScope);
 	}
 
 	getResourceList(): ResourceList {

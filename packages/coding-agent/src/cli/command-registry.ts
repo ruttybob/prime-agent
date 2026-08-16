@@ -1,4 +1,4 @@
-import { APP_NAME } from "../config.js";
+import { APP_NAME, CONFIG_DIR_NAME } from "../config.js";
 
 export interface CommandSpec {
 	path: readonly string[];
@@ -147,8 +147,10 @@ export const COMMAND_SPECS: readonly CommandSpec[] = [
 	},
 	{
 		path: ["config"],
-		usage: "config",
+		usage: "config [-l]",
 		summary: "Configure package resources",
+		description: `Opens the resource configuration TUI. Without -l it starts in global mode; press Tab to switch between global and project-local modes.`,
+		options: [`-l, --local  Start in project-local mode (${CONFIG_DIR_NAME}/settings.json)`],
 	},
 ];
 

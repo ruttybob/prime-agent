@@ -275,6 +275,57 @@ Content`,
 		});
 	});
 
+	describe("resolveScoped", () => {
+		it("returns the effective resolution as the project view", async () => {
+			const userSkillsDir = join(agentDir, "skills", "foo");
+			mkdirSync(userSkillsDir, { recursive: true });
+			writeFileSync(join(userSkillsDir, "SKILL.md"), "# Foo");
+
+			// Cross-scope override: project settings reference the user skill by path
+			// (plain entry + force-exclude pattern).
+			const userSkillPath = join(userSkillsDir, "SKILL.md");
+			settingsManager.setProjectSkillPaths([userSkillPath, `-${userSkillPath}`]);
+
+			const scoped = await packageManager.resolveScoped();
+			expect(scoped.project.skills.some((r) => pathEndsWith(r.path, "skills/foo/SKILL.md") && !r.enabled)).toBe(
+				true,
+			);
+		});
+
+		it("global baseline ignores project settings", async () => {
+			const userSkillsDir = join(agentDir, "skills", "foo");
+			mkdirSync(userSkillsDir, { recursive: true });
+			writeFileSync(join(userSkillsDir, "SKILL.md"), "# Foo");
+
+			const userSkillPath = join(userSkillsDir, "SKILL.md");
+			settingsManager.setProjectSkillPaths([userSkillPath, `-${userSkillPath}`]);
+
+			const scoped = await packageManager.resolveScoped();
+			expect(scoped.global.skills.some((r) => pathEndsWith(r.path, "skills/foo/SKILL.md") && r.enabled)).toBe(true);
+		});
+
+		it("global baseline keeps user settings applied", async () => {
+			const userSkillsDir = join(agentDir, "skills", "foo");
+			mkdirSync(userSkillsDir, { recursive: true });
+			writeFileSync(join(userSkillsDir, "SKILL.md"), "# Foo");
+
+			settingsManager.setSkillPaths(["!skills/foo/SKILL.md"]);
+
+			const scoped = await packageManager.resolveScoped();
+			expect(scoped.global.skills.some((r) => pathEndsWith(r.path, "skills/foo/SKILL.md") && !r.enabled)).toBe(true);
+		});
+
+		it("global baseline excludes project-scope resources", async () => {
+			const projectSkillsDir = join(tempDir, ".prime", "agent", "skills", "bar");
+			mkdirSync(projectSkillsDir, { recursive: true });
+			writeFileSync(join(projectSkillsDir, "SKILL.md"), "# Bar");
+
+			const scoped = await packageManager.resolveScoped();
+			expect(scoped.global.skills.every((r) => r.metadata.scope !== "project")).toBe(true);
+			expect(scoped.project.skills.some((r) => r.metadata.scope === "project" && r.enabled)).toBe(true);
+		});
+	});
+
 	describe(".agents/skills auto-discovery", () => {
 		it("should scan .agents/skills from cwd up to git repo root", async () => {
 			const repoRoot = join(tempDir, "repo");

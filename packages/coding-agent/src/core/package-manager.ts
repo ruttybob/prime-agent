@@ -33,7 +33,7 @@ import { type GitSource, parseGitUrl } from "../utils/git.js";
 import { canonicalizePath, isLocalPath } from "../utils/paths.js";
 import type { ResourceDiagnostic } from "./diagnostics.js";
 import { isStdoutTakenOver } from "./output-guard.js";
-import type { PackageSource, SettingsManager } from "./settings-manager.js";
+import { type PackageSource, SettingsManager } from "./settings-manager.js";
 
 const NETWORK_TIMEOUT_MS = 10000;
 const UPDATE_CHECK_CONCURRENCY = 4;
@@ -66,6 +66,17 @@ export interface ResolvedPaths {
 	diagnostics: ResourceDiagnostic[];
 }
 
+/**
+ * Two resolved views consumed by the config selector: a global baseline that
+ * ignores project settings, and the effective resolution that applies them.
+ */
+export interface ScopedResolvedPaths {
+	/** Resolution with project settings ignored; project-scope resources excluded. */
+	global: ResolvedPaths;
+	/** Effective resolution with project settings applied. */
+	project: ResolvedPaths;
+}
+
 export type MissingSourceAction = "install" | "skip" | "error";
 
 export interface ProgressEvent {
@@ -93,6 +104,7 @@ export interface ConfiguredPackage {
 
 export interface PackageManager {
 	resolve(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ResolvedPaths>;
+	resolveScoped(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ScopedResolvedPaths>;
 	install(source: string, options?: { local?: boolean }): Promise<void>;
 	installAndPersist(source: string, options?: { local?: boolean }): Promise<void>;
 	remove(source: string, options?: { local?: boolean }): Promise<void>;
@@ -690,6 +702,17 @@ function getOverridePatterns(entries: string[]): string[] {
 	return entries.filter((pattern) => pattern.startsWith("!") || pattern.startsWith("+") || pattern.startsWith("-"));
 }
 
+function keepUserScope(resolved: ResolvedPaths): ResolvedPaths {
+	const userOnly = (resources: ResolvedResource[]) => resources.filter((r) => r.metadata.scope !== "project");
+	return {
+		extensions: userOnly(resolved.extensions),
+		skills: userOnly(resolved.skills),
+		prompts: userOnly(resolved.prompts),
+		themes: userOnly(resolved.themes),
+		diagnostics: resolved.diagnostics,
+	};
+}
+
 function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: string): boolean {
 	const overrides = getOverridePatterns(patterns);
 	const excludes = overrides.filter((pattern) => pattern.startsWith("!")).map((pattern) => pattern.slice(1));
@@ -926,6 +949,23 @@ export class DefaultPackageManager implements PackageManager {
 		const packageSources = sources.map((source) => ({ pkg: source as PackageSource, scope }));
 		await this.resolvePackageSources(packageSources, accumulator);
 		return this.toResolvedPaths(accumulator);
+	}
+
+	async resolveScoped(onMissing?: (source: string) => Promise<MissingSourceAction>): Promise<ScopedResolvedPaths> {
+		// The baseline resolves against a manager seeded with global settings only,
+		// so project settings cannot influence any enabled state.
+		const baselineManager = new DefaultPackageManager({
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			settingsManager: SettingsManager.inMemory(this.settingsManager.getGlobalSettings()),
+			bundledSkillsDir: this.bundledSkillsDir,
+			extraBuiltinSkillOverrides: this.extraBuiltinSkillOverrides,
+		});
+		const global = await baselineManager.resolve(onMissing);
+		return {
+			global: keepUserScope(global),
+			project: await this.resolve(onMissing),
+		};
 	}
 
 	listConfiguredPackages(): ConfiguredPackage[] {

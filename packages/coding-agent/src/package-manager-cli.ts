@@ -1385,9 +1385,29 @@ export async function runDaemonUpdateRestartCoordinator(options: {
 	return statusWriter.current();
 }
 
+const CONFIG_COMMAND_USAGE = `${APP_NAME} config [-l]`;
+
 export async function handleConfigCommand(args: string[]): Promise<boolean> {
-	if (args[0] !== "config") {
+	const [command, ...rest] = args;
+	if (command !== "config") {
 		return false;
+	}
+
+	let local = false;
+	for (const arg of rest) {
+		if (arg === "-l" || arg === "--local") {
+			local = true;
+		} else if (arg.startsWith("-")) {
+			console.error(chalk.red(`Unknown option ${arg} for "config".`));
+			console.error(chalk.dim(`Usage: ${CONFIG_COMMAND_USAGE}`));
+			process.exitCode = 1;
+			return true;
+		} else {
+			console.error(chalk.red(`Unexpected argument ${arg}.`));
+			console.error(chalk.dim(`Usage: ${CONFIG_COMMAND_USAGE}`));
+			process.exitCode = 1;
+			return true;
+		}
 	}
 
 	const cwd = process.cwd();
@@ -1395,16 +1415,18 @@ export async function handleConfigCommand(args: string[]): Promise<boolean> {
 	const settingsManager = SettingsManager.create(cwd, agentDir);
 	reportSettingsErrors(settingsManager, "config command");
 	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
-	const resolvedPaths = await packageManager.resolve();
+	const resolvedPaths = await packageManager.resolveScoped();
 
 	await selectConfig({
 		resolvedPaths,
 		settingsManager,
 		cwd,
 		agentDir,
+		writeScope: local ? "project" : "global",
 	});
 
 	process.exit(0);
+	return true;
 }
 
 export async function handlePackageCommand(args: string[]): Promise<boolean> {
