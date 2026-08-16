@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Added tri-state project overrides to the config TUI project pane: inherited global resources are shown dimmed and space cycles inherit / load / unload, writing small override patterns into the project settings file only.
 - Added scope panes to `prime-agent config`: Tab switches between global resources and project-local resources, and `config -l` opens directly in the project pane.
 - Added Mermaid diagram rendering as Unicode box-drawing art in chat messages, with a settings toggle.
 - Added the current working directory to the editor status line.

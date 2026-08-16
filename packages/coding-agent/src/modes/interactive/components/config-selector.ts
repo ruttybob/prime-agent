@@ -23,6 +23,7 @@ import type {
 	ScopedResolvedPaths,
 } from "../../../core/package-manager.js";
 import type { PackageSource, SettingsManager } from "../../../core/settings-manager.js";
+import { canonicalizePath } from "../../../utils/paths.js";
 import { theme } from "../theme/theme.js";
 import { DynamicBorder } from "./dynamic-border.js";
 import { keyHint, rawKeyHint } from "./keybinding-hints.js";
@@ -31,6 +32,11 @@ type ResourceType = "extensions" | "skills" | "prompts" | "themes";
 
 /** Which settings file the selector writes to. */
 export type ConfigWriteScope = "global" | "project";
+
+type SettingsScope = "user" | "project";
+
+/** Project-pane override state for a resource relative to the global setup. */
+type ProjectOverrideState = "inherit" | "load" | "unload";
 
 const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
 	extensions: "Extensions",
@@ -204,17 +210,14 @@ class ConfigSelectorHeader implements Component {
 	render(width: number): string[] {
 		const title = theme.bold(this.writeScope === "project" ? "Project Local Resources" : "Global Resources");
 		const sep = theme.fg("muted", " · ");
-		const hint =
-			keyHint("tui.input.tab", "switch mode") +
-			sep +
-			rawKeyHint("space", "toggle") +
-			sep +
-			rawKeyHint("esc", "close");
+		const actionHint =
+			this.writeScope === "project" ? rawKeyHint("space", "cycle inherit/+/-") : rawKeyHint("space", "toggle");
+		const hint = keyHint("tui.input.tab", "switch mode") + sep + actionHint + sep + rawKeyHint("esc", "close");
 		const spacing = Math.max(1, width - visibleWidth(title) - visibleWidth(hint));
 		const scopeHint =
 			this.writeScope === "project"
-				? theme.fg("muted", `${CONFIG_DIR_NAME}/settings.json · Tab switches to global resources`)
-				: theme.fg("muted", `~/${CONFIG_DIR_NAME}/settings.json · Tab switches to project resources`);
+				? theme.fg("muted", `${CONFIG_DIR_NAME}/settings.json · inherited global resources are dimmed`)
+				: theme.fg("muted", `~/${CONFIG_DIR_NAME}/settings.json`);
 
 		return [
 			truncateToWidth(`${title}${" ".repeat(spacing)}${hint}`, width, ""),
@@ -234,6 +237,7 @@ class ResourceList implements Component, Focusable {
 	private cwd: string;
 	private agentDir: string;
 	private writeScope: ConfigWriteScope;
+	private inheritedEnabledByKey: Map<string, boolean>;
 
 	public onCancel?: () => void;
 	public onExit?: () => void;
@@ -262,6 +266,7 @@ class ResourceList implements Component, Focusable {
 		this.cwd = cwd;
 		this.agentDir = agentDir;
 		this.writeScope = writeScope;
+		this.inheritedEnabledByKey = this.buildInheritedEnabledMap(groupsByScope.global);
 		this.searchInput = new Input();
 		// 8 lines of chrome: top spacer + top border + spacer + header (2 lines) + spacer + bottom spacer + bottom border
 		const chrome = 8;
@@ -278,6 +283,18 @@ class ResourceList implements Component, Focusable {
 
 	private get groups(): ResourceGroup[] {
 		return this.groupsByScope[this.writeScope];
+	}
+
+	private buildInheritedEnabledMap(groups: ResourceGroup[]): Map<string, boolean> {
+		const result = new Map<string, boolean>();
+		for (const group of groups) {
+			for (const subgroup of group.subgroups) {
+				for (const item of subgroup.items) {
+					result.set(this.getResourceItemKey(item), item.enabled);
+				}
+			}
+		}
+		return result;
 	}
 
 	private buildFlatList(): void {
@@ -404,19 +421,29 @@ class ResourceList implements Component, Focusable {
 
 			if (entry.type === "group") {
 				// Main group header (no cursor)
-				const groupLine = theme.fg("accent", theme.bold(entry.group.label));
+				const inherited = this.writeScope === "project" && entry.group.scope === "user";
+				const label = theme.bold(`${entry.group.label}${inherited ? " · inherited global" : ""}`);
+				const groupLine = theme.fg(inherited ? "dim" : "accent", label);
 				lines.push(truncateToWidth(`  ${groupLine}`, width, ""));
 			} else if (entry.type === "subgroup") {
 				// Subgroup header (indented, no cursor)
-				const subgroupLine = theme.fg("muted", entry.subgroup.label);
+				const color = this.writeScope === "project" && entry.group.scope === "user" ? "dim" : "muted";
+				const subgroupLine = theme.fg(color, entry.subgroup.label);
 				lines.push(truncateToWidth(`    ${subgroupLine}`, width, ""));
 			} else {
 				// Resource item (cursor only on items)
 				const item = entry.item;
 				const cursor = isSelected ? "> " : "  ";
-				const checkbox = item.enabled ? theme.fg("success", "[x]") : theme.fg("dim", "[ ]");
-				const name = isSelected ? theme.bold(item.displayName) : item.displayName;
-				lines.push(truncateToWidth(`${cursor}    ${checkbox} ${name}`, width, "..."));
+				const dimmed = this.isDimmedItem(item);
+				const nameText = isSelected && !dimmed ? theme.bold(item.displayName) : item.displayName;
+				const name = dimmed ? theme.fg("dim", nameText) : nameText;
+				lines.push(
+					truncateToWidth(
+						`${cursor}    ${this.renderCheckbox(item)} ${name}${this.getItemSuffix(item)}`,
+						width,
+						"...",
+					),
+				);
 			}
 		}
 
@@ -478,11 +505,12 @@ class ResourceList implements Component, Focusable {
 		}
 		if (data === " " || kb.matches(data, "tui.select.confirm")) {
 			const entry = this.filteredItems[this.selectedIndex];
-			if (entry?.type === "item") {
-				const newEnabled = !entry.item.enabled;
-				this.toggleResource(entry.item, newEnabled);
-				this.updateItem(entry.item, newEnabled);
-				this.onToggle?.(entry.item, newEnabled);
+			if (entry?.type === "item" && (this.writeScope === "project" || this.getItemScope(entry.item) === "user")) {
+				const newEnabled = this.toggleResource(entry.item);
+				if (newEnabled !== undefined) {
+					this.updateItem(entry.item, newEnabled);
+					this.onToggle?.(entry.item, newEnabled);
+				}
 			}
 			return;
 		}
@@ -492,12 +520,140 @@ class ResourceList implements Component, Focusable {
 		this.filterItems(this.searchInput.getValue());
 	}
 
-	private toggleResource(item: ResourceItem, enabled: boolean): void {
+	private toggleResource(item: ResourceItem): boolean | undefined {
+		if (this.writeScope === "project") {
+			// Package resources have no project-scope tri-state: override deltas
+			// over a user-installed package are not expressible in settings.
+			if (item.metadata.origin !== "top-level") return undefined;
+			const state = this.getNextOverrideState(item);
+			this.setProjectTopLevelOverride(item, state);
+			return state === "inherit" ? this.getInheritedEnabled(item) : state === "load";
+		}
+
+		const enabled = !item.enabled;
 		if (item.metadata.origin === "top-level") {
 			this.toggleTopLevelResource(item, enabled);
 		} else {
 			this.togglePackageResource(item, enabled);
 		}
+		return enabled;
+	}
+
+	private renderCheckbox(item: ResourceItem): string {
+		if (this.writeScope === "project") {
+			const state = this.getProjectOverrideState(item);
+			if (state === "load") return theme.fg("success", "[+]");
+			if (state === "unload") return theme.fg("warning", "[-]");
+			return theme.fg("dim", item.enabled ? "[x]" : "[ ]");
+		}
+		return item.enabled ? theme.fg("success", "[x]") : theme.fg("dim", "[ ]");
+	}
+
+	private getItemSuffix(item: ResourceItem): string {
+		if (this.writeScope !== "project") return "";
+		const state = this.getProjectOverrideState(item);
+		if (state === "load") return theme.fg("muted", "  project load");
+		if (state === "unload") return theme.fg("muted", "  project unload");
+		return this.isInheritedGlobalItem(item) ? theme.fg("dim", "  inherited global") : "";
+	}
+
+	private isDimmedItem(item: ResourceItem): boolean {
+		return (
+			this.writeScope === "project" &&
+			this.isInheritedGlobalItem(item) &&
+			this.getProjectOverrideState(item) === "inherit"
+		);
+	}
+
+	private setProjectTopLevelOverride(item: ResourceItem, state: ProjectOverrideState): void {
+		const current = (this.settingsManager.getProjectSettings()[item.resourceType] ?? []) as string[];
+		const pattern = this.isInheritedGlobalItem(item) ? item.path : this.getResourcePatternForScope(item, "project");
+		const patterns = this.getTopLevelOverridePatterns(item, "project");
+		const updated = current.filter((entry) => {
+			const target = this.getPatternEntryTarget(entry);
+			if ((entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-")) && patterns.has(target))
+				return false;
+			return !(state === "inherit" && this.isInheritedGlobalItem(item) && target === pattern);
+		});
+		if (state !== "inherit") {
+			if (this.isInheritedGlobalItem(item) && !updated.includes(pattern)) updated.push(pattern);
+			updated.push(`${state === "load" ? "+" : "-"}${pattern}`);
+		}
+		this.setProjectTopLevelPaths(item.resourceType, updated);
+	}
+
+	private setProjectTopLevelPaths(key: ResourceType, paths: string[]): void {
+		if (key === "extensions") this.settingsManager.setProjectExtensionPaths(paths);
+		else if (key === "skills") this.settingsManager.setProjectSkillPaths(paths);
+		else if (key === "prompts") this.settingsManager.setProjectPromptTemplatePaths(paths);
+		else this.settingsManager.setProjectThemePaths(paths);
+	}
+
+	private getNextOverrideState(item: ResourceItem): ProjectOverrideState {
+		const state = this.getProjectOverrideState(item);
+		const inheritedEnabled = this.getInheritedEnabled(item);
+		if (state === "inherit") return inheritedEnabled ? "unload" : "load";
+		if (state === "unload") return inheritedEnabled ? "load" : "inherit";
+		return inheritedEnabled ? "inherit" : "unload";
+	}
+
+	private getProjectOverrideState(item: ResourceItem): ProjectOverrideState {
+		if (this.writeScope !== "project" || item.metadata.origin !== "top-level") return "inherit";
+		return this.getOverrideStateFromEntries(
+			(this.settingsManager.getProjectSettings()[item.resourceType] ?? []) as string[],
+			this.getTopLevelOverridePatterns(item, "project"),
+		);
+	}
+
+	private getOverrideStateFromEntries(entries: string[], patterns: Set<string>): ProjectOverrideState {
+		let state: ProjectOverrideState = "inherit";
+		for (const entry of entries) {
+			if (!patterns.has(this.getPatternEntryTarget(entry))) continue;
+			if (entry.startsWith("!") || entry.startsWith("-")) state = "unload";
+			else state = "load";
+		}
+		return state;
+	}
+
+	private getInheritedEnabled(item: ResourceItem): boolean {
+		return (
+			this.inheritedEnabledByKey.get(this.getResourceItemKey(item)) ??
+			(this.getItemScope(item) === "user" ? item.enabled : true)
+		);
+	}
+
+	private isInheritedGlobalItem(item: ResourceItem): boolean {
+		return this.getItemScope(item) === "user" || this.inheritedEnabledByKey.has(this.getResourceItemKey(item));
+	}
+
+	private getTopLevelOverridePatterns(item: ResourceItem, scope: SettingsScope): Set<string> {
+		const baseDir = this.getTopLevelBaseDir(scope);
+		const patterns = new Set<string>([
+			this.getResourcePatternForScope(item, scope),
+			item.path,
+			relative(baseDir, item.path),
+		]);
+		if (item.metadata.baseDir) patterns.add(relative(item.metadata.baseDir, item.path));
+		return patterns;
+	}
+
+	private getResourcePatternForScope(item: ResourceItem, scope: SettingsScope): string {
+		const sourceScope = this.getItemScope(item);
+		if (scope !== sourceScope) return item.path;
+		const baseDir = item.metadata.baseDir ?? this.getTopLevelBaseDir(sourceScope);
+		return relative(baseDir, item.path);
+	}
+
+	private getPatternEntryTarget(entry: string): string {
+		return entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-") ? entry.slice(1) : entry;
+	}
+
+	private getResourceItemKey(item: ResourceItem): string {
+		return `${item.resourceType}:${canonicalizePath(item.path)}`;
+	}
+
+	private getItemScope(item: ResourceItem): SettingsScope {
+		return item.metadata.scope === "project" ? "project" : "user";
 	}
 
 	private toggleTopLevelResource(item: ResourceItem, enabled: boolean): void {
@@ -612,13 +768,8 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private getResourcePattern(item: ResourceItem): string {
-		// Built-in resources live under the package install dir; their override
-		// patterns are matched relative to metadata.baseDir, not the config dir.
-		if (item.metadata.source === "builtin" && item.metadata.baseDir) {
-			return relative(item.metadata.baseDir, item.path);
-		}
-		const scope = item.metadata.scope as "user" | "project";
-		const baseDir = this.getTopLevelBaseDir(scope);
+		const scope = this.getItemScope(item);
+		const baseDir = item.metadata.baseDir ?? this.getTopLevelBaseDir(scope);
 		return relative(baseDir, item.path);
 	}
 
@@ -657,8 +808,8 @@ export class ConfigSelectorComponent extends Container implements Focusable {
 
 		this.writeScope = writeScope;
 		const groupsByScope = {
-			global: buildGroups(resolvedPaths.global, agentDir).filter((group) => group.scope === "user"),
-			project: buildGroups(resolvedPaths.project, agentDir).filter((group) => group.scope === "project"),
+			global: buildGroups(resolvedPaths.global, agentDir),
+			project: buildGroups(resolvedPaths.project, agentDir),
 		};
 
 		// Add header
