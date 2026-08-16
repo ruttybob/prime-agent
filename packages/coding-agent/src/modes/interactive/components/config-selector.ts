@@ -38,6 +38,16 @@ type SettingsScope = "user" | "project";
 /** Project-pane override state for a resource relative to the global setup. */
 type ProjectOverrideState = "inherit" | "load" | "unload";
 
+/** True when a settings entry carries an override sigil (`!`, `+`, or `-`). */
+function hasOverrideSigil(entry: string): boolean {
+	return entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-");
+}
+
+/** Strip a leading override sigil (`!`, `+`, or `-`) from a settings entry. */
+function stripOverrideSigil(entry: string): string {
+	return hasOverrideSigil(entry) ? entry.slice(1) : entry;
+}
+
 const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
 	extensions: "Extensions",
 	skills: "Skills",
@@ -72,13 +82,14 @@ interface ResourceGroup {
 
 function formatBaseDir(baseDir: string): string {
 	const homeDir = homedir();
+	const rest = baseDir.startsWith(homeDir) ? baseDir.slice(homeDir.length) : undefined;
 	let displayPath: string;
 
 	if (baseDir === homeDir) {
 		displayPath = "~";
-	} else if (baseDir.startsWith(homeDir)) {
-		// Replace home prefix with ~, normalize separators for display
-		const rest = baseDir.slice(homeDir.length);
+	} else if (rest !== undefined && (rest.startsWith("/") || rest.startsWith("\\"))) {
+		// Only replace the home prefix on a path-separator boundary so sibling
+		// directories (/home/u-x next to /home/u) are not rewritten to ~/x.
 		displayPath = `~${rest.replace(/\\/g, "/")}`;
 	} else {
 		displayPath = baseDir.replace(/\\/g, "/");
@@ -283,6 +294,24 @@ class ResourceList implements Component, Focusable {
 
 	private get groups(): ResourceGroup[] {
 		return this.groupsByScope[this.writeScope];
+	}
+
+	private get projectPathSetters(): Record<ResourceType, (paths: string[]) => void> {
+		return {
+			extensions: (paths) => this.settingsManager.setProjectExtensionPaths(paths),
+			skills: (paths) => this.settingsManager.setProjectSkillPaths(paths),
+			prompts: (paths) => this.settingsManager.setProjectPromptTemplatePaths(paths),
+			themes: (paths) => this.settingsManager.setProjectThemePaths(paths),
+		};
+	}
+
+	private get globalPathSetters(): Record<ResourceType, (paths: string[]) => void> {
+		return {
+			extensions: (paths) => this.settingsManager.setExtensionPaths(paths),
+			skills: (paths) => this.settingsManager.setSkillPaths(paths),
+			prompts: (paths) => this.settingsManager.setPromptTemplatePaths(paths),
+			themes: (paths) => this.settingsManager.setThemePaths(paths),
+		};
 	}
 
 	private buildInheritedEnabledMap(groups: ResourceGroup[]): Map<string, boolean> {
@@ -567,12 +596,11 @@ class ResourceList implements Component, Focusable {
 
 	private setProjectTopLevelOverride(item: ResourceItem, state: ProjectOverrideState): void {
 		const current = (this.settingsManager.getProjectSettings()[item.resourceType] ?? []) as string[];
-		const pattern = this.isInheritedGlobalItem(item) ? item.path : this.getResourcePatternForScope(item, "project");
-		const patterns = this.getTopLevelOverridePatterns(item, "project");
+		const pattern = this.isInheritedGlobalItem(item) ? item.path : this.getProjectResourcePattern(item);
+		const patterns = this.getTopLevelOverridePatterns(item);
 		const updated = current.filter((entry) => {
-			const target = this.getPatternEntryTarget(entry);
-			if ((entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-")) && patterns.has(target))
-				return false;
+			const target = stripOverrideSigil(entry);
+			if (hasOverrideSigil(entry) && patterns.has(target)) return false;
 			return !(state === "inherit" && this.isInheritedGlobalItem(item) && target === pattern);
 		});
 		if (state !== "inherit") {
@@ -583,10 +611,7 @@ class ResourceList implements Component, Focusable {
 	}
 
 	private setProjectTopLevelPaths(key: ResourceType, paths: string[]): void {
-		if (key === "extensions") this.settingsManager.setProjectExtensionPaths(paths);
-		else if (key === "skills") this.settingsManager.setProjectSkillPaths(paths);
-		else if (key === "prompts") this.settingsManager.setProjectPromptTemplatePaths(paths);
-		else this.settingsManager.setProjectThemePaths(paths);
+		this.projectPathSetters[key](paths);
 	}
 
 	private getNextOverrideState(item: ResourceItem): ProjectOverrideState {
@@ -601,16 +626,15 @@ class ResourceList implements Component, Focusable {
 		if (this.writeScope !== "project" || item.metadata.origin !== "top-level") return "inherit";
 		return this.getOverrideStateFromEntries(
 			(this.settingsManager.getProjectSettings()[item.resourceType] ?? []) as string[],
-			this.getTopLevelOverridePatterns(item, "project"),
+			this.getTopLevelOverridePatterns(item),
 		);
 	}
 
 	private getOverrideStateFromEntries(entries: string[], patterns: Set<string>): ProjectOverrideState {
 		let state: ProjectOverrideState = "inherit";
 		for (const entry of entries) {
-			if (!patterns.has(this.getPatternEntryTarget(entry))) continue;
-			if (entry.startsWith("!") || entry.startsWith("-")) state = "unload";
-			else state = "load";
+			if (!patterns.has(stripOverrideSigil(entry))) continue;
+			state = entry.startsWith("!") || entry.startsWith("-") ? "unload" : "load";
 		}
 		return state;
 	}
@@ -626,26 +650,18 @@ class ResourceList implements Component, Focusable {
 		return this.getItemScope(item) === "user" || this.inheritedEnabledByKey.has(this.getResourceItemKey(item));
 	}
 
-	private getTopLevelOverridePatterns(item: ResourceItem, scope: SettingsScope): Set<string> {
-		const baseDir = this.getTopLevelBaseDir(scope);
-		const patterns = new Set<string>([
-			this.getResourcePatternForScope(item, scope),
-			item.path,
-			relative(baseDir, item.path),
-		]);
+	private getTopLevelOverridePatterns(item: ResourceItem): Set<string> {
+		const baseDir = this.getTopLevelBaseDir("project");
+		const patterns = new Set<string>([this.getProjectResourcePattern(item), item.path, relative(baseDir, item.path)]);
 		if (item.metadata.baseDir) patterns.add(relative(item.metadata.baseDir, item.path));
 		return patterns;
 	}
 
-	private getResourcePatternForScope(item: ResourceItem, scope: SettingsScope): string {
-		const sourceScope = this.getItemScope(item);
-		if (scope !== sourceScope) return item.path;
-		const baseDir = item.metadata.baseDir ?? this.getTopLevelBaseDir(sourceScope);
+	/** Pattern a project entry uses to reference this resource (absolute when it lives in user scope). */
+	private getProjectResourcePattern(item: ResourceItem): string {
+		if (this.getItemScope(item) !== "project") return item.path;
+		const baseDir = item.metadata.baseDir ?? this.getTopLevelBaseDir("project");
 		return relative(baseDir, item.path);
-	}
-
-	private getPatternEntryTarget(entry: string): string {
-		return entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-") ? entry.slice(1) : entry;
 	}
 
 	private getResourceItemKey(item: ResourceItem): string {
@@ -670,10 +686,7 @@ class ResourceList implements Component, Focusable {
 		const enablePattern = `+${pattern}`;
 
 		// Filter out existing patterns for this resource
-		const updated = current.filter((p) => {
-			const stripped = p.startsWith("!") || p.startsWith("+") || p.startsWith("-") ? p.slice(1) : p;
-			return stripped !== pattern;
-		});
+		const updated = current.filter((p) => stripOverrideSigil(p) !== pattern);
 
 		if (enabled) {
 			updated.push(enablePattern);
@@ -682,25 +695,9 @@ class ResourceList implements Component, Focusable {
 		}
 
 		if (scope === "project") {
-			if (arrayKey === "extensions") {
-				this.settingsManager.setProjectExtensionPaths(updated);
-			} else if (arrayKey === "skills") {
-				this.settingsManager.setProjectSkillPaths(updated);
-			} else if (arrayKey === "prompts") {
-				this.settingsManager.setProjectPromptTemplatePaths(updated);
-			} else if (arrayKey === "themes") {
-				this.settingsManager.setProjectThemePaths(updated);
-			}
+			this.projectPathSetters[arrayKey](updated);
 		} else {
-			if (arrayKey === "extensions") {
-				this.settingsManager.setExtensionPaths(updated);
-			} else if (arrayKey === "skills") {
-				this.settingsManager.setSkillPaths(updated);
-			} else if (arrayKey === "prompts") {
-				this.settingsManager.setPromptTemplatePaths(updated);
-			} else if (arrayKey === "themes") {
-				this.settingsManager.setThemePaths(updated);
-			}
+			this.globalPathSetters[arrayKey](updated);
 		}
 	}
 
@@ -735,10 +732,7 @@ class ResourceList implements Component, Focusable {
 		const enablePattern = `+${pattern}`;
 
 		// Filter out existing patterns for this resource
-		const updated = current.filter((p) => {
-			const stripped = p.startsWith("!") || p.startsWith("+") || p.startsWith("-") ? p.slice(1) : p;
-			return stripped !== pattern;
-		});
+		const updated = current.filter((p) => stripOverrideSigil(p) !== pattern);
 
 		if (enabled) {
 			updated.push(enablePattern);

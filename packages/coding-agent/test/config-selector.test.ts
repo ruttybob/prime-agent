@@ -139,6 +139,21 @@ describe("ConfigSelectorComponent", () => {
 		expect(existsSync(globalSettingsPath)).toBe(false);
 	});
 
+	it("undims an inherited-global resource once overridden", async () => {
+		const component = await createComponent();
+		const list = component.getResourceList();
+		list.handleInput("\t");
+
+		const fooLine = () => component.render(120).find((line) => stripAnsi(line).includes("foo"))!;
+		const dimmedText = theme.fg("dim", "probe");
+		const dimEscape = dimmedText.slice(0, dimmedText.indexOf("probe"));
+		expect(fooLine()).toContain(dimEscape);
+
+		list.handleInput(" ");
+		expect(fooLine()).not.toContain(dimEscape);
+		expect(stripAnsi(fooLine())).toContain("project unload");
+	});
+
 	it("cycles an inherited-global resource inherit → unload → load → inherit, replacing entries idempotently", async () => {
 		const component = await createComponent();
 		const list = component.getResourceList();
