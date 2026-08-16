@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fixed `prime-agent config -l` failing with a usage error; the flag is now accepted and opens the project pane.
+- Fixed subcommands being missed when global run options such as `--daemon-socket` or `--session-dir` precede them, so wrapper functions like `pa-dev config -l` dispatch correctly.
 - Added tri-state project overrides to the config TUI project pane: inherited global resources are shown dimmed and space cycles inherit / load / unload, writing small override patterns into the project settings file only.
 - Added scope panes to `prime-agent config`: Tab switches between global resources and project-local resources, and `config -l` opens directly in the project pane.
 - Added Mermaid diagram rendering as Unicode box-drawing art in chat messages, with a settings toggle.

@@ -34,7 +34,7 @@ export async function handlePublicCommand(args: string[]): Promise<PublicCommand
 }
 
 async function runPublicCommand(args: string[]): Promise<PublicCommandResult> {
-	args = normalizeLeadingDaemonSocketOption(args);
+	args = normalizeLeadingRunOptions(args);
 	if (args[0] === "help" && isHelpCommandRequest(args.slice(1))) {
 		return printRequestedHelp(args.slice(1));
 	}
@@ -138,24 +138,45 @@ async function runPublicCommand(args: string[]): Promise<PublicCommandResult> {
 		case "session":
 			return rewriteNestedCommand("session", "export", "--export", args.slice(1));
 		case "config":
-			if (!requireArgumentCount(args.slice(1), 0, "config")) return HANDLED;
+			// handleConfigCommand validates the full argument list itself.
 			return continueWith(args);
 		default:
 			return continueWith(args);
 	}
 }
 
-function normalizeLeadingDaemonSocketOption(args: string[]): string[] {
-	const option = args[0];
-	if (option !== "--daemon-socket") {
+/**
+ * Run options that wrappers (e.g. the dev shell function) prepend before the
+ * command word, which otherwise hides the command from dispatch.
+ */
+const LEADING_RUN_OPTIONS = new Set(["--daemon-socket", "--session-dir"]);
+
+/** Public commands whose daemon client accepts a `--daemon-socket` argument. */
+const DAEMON_SOCKET_COMMANDS = new Set(["stop", "rename", "list", "send"]);
+
+function normalizeLeadingRunOptions(args: string[]): string[] {
+	let index = 0;
+	let daemonSocket: string | undefined;
+	while (index + 1 < args.length && LEADING_RUN_OPTIONS.has(args[index]!)) {
+		if (args[index] === "--daemon-socket") {
+			daemonSocket = args[index + 1]!;
+		}
+		index += 2;
+	}
+	if (index === 0) {
 		return args;
 	}
-	const socketPath = args[1];
-	const command = args[2];
-	if (socketPath === undefined || (command !== "stop" && command !== "rename")) {
+	const command = args[index];
+	if (command === undefined || !PUBLIC_COMMAND_NAMES.has(command)) {
+		// Not a command word: an agent run (message/prompt) keeps its options.
 		return args;
 	}
-	return [command, ...args.slice(3), option, socketPath];
+	const rest = args.slice(index + 1);
+	if (daemonSocket !== undefined && DAEMON_SOCKET_COMMANDS.has(command)) {
+		return [command, ...rest, "--daemon-socket", daemonSocket];
+	}
+	// Other commands do not consume agent-run options, so they are dropped.
+	return [command, ...rest];
 }
 
 function continueWith(args: string[]): PublicCommandResult {
@@ -336,14 +357,6 @@ function parseBooleanOptions(args: string[], allowed: ReadonlySet<string>, comma
 		options.add(arg);
 	}
 	return options;
-}
-
-function requireArgumentCount(args: string[], count: number, command: string): boolean {
-	if (args.length === count) {
-		return true;
-	}
-	fail(`Usage: ${APP_NAME} ${getCommandSpec([command])?.usage ?? command}`);
-	return false;
 }
 
 function hasPositionalArguments(args: string[]): boolean {

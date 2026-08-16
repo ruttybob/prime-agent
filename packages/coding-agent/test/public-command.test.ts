@@ -121,6 +121,58 @@ describe("public command routing", () => {
 		]);
 	});
 
+	it("routes config with its own flag to the config command", async () => {
+		await expect(handlePublicCommand(["config", "-l"])).resolves.toEqual({
+			handled: false,
+			args: ["config", "-l"],
+			explicitAgentsView: false,
+		});
+	});
+
+	it("dispatches commands preceded by global run options", async () => {
+		// Wrappers (e.g. pa-dev) prepend run options before the command word.
+		await expect(
+			handlePublicCommand([
+				"--daemon-socket",
+				"/tmp/dev.sock",
+				"--session-dir",
+				"/tmp/dev-sessions",
+				"config",
+				"-l",
+			]),
+		).resolves.toEqual({
+			handled: false,
+			args: ["config", "-l"],
+			explicitAgentsView: false,
+		});
+	});
+
+	it("forwards the daemon socket from leading run options when stopping an agent", async () => {
+		await handlePublicCommand(["--daemon-socket", "/tmp/dev.sock", "--session-dir", "/tmp/s", "stop", "worker"]);
+		expect(mocks.daemonCommands).toEqual([["daemon", "kill", "worker", "--daemon-socket", "/tmp/dev.sock"]]);
+	});
+
+	it("forwards the daemon socket from leading run options when listing agents", async () => {
+		await handlePublicCommand(["--daemon-socket", "/tmp/dev.sock", "list", "--json"]);
+		expect(mocks.daemonCommands).toEqual([["daemon", "list", "--json", "--daemon-socket", "/tmp/dev.sock"]]);
+	});
+
+	it("keeps leading run options untouched when no command follows them", async () => {
+		const args = ["--daemon-socket", "/tmp/dev.sock", "--session-dir", "/tmp/s", "hello world"];
+		await expect(handlePublicCommand(args)).resolves.toEqual({
+			handled: false,
+			args,
+			explicitAgentsView: false,
+		});
+	});
+
+	it("routes command help preceded by global run options", async () => {
+		await expect(handlePublicCommand(["--daemon-socket", "/tmp/dev.sock", "help", "config"])).resolves.toMatchObject({
+			handled: true,
+		});
+		expect(console.log).toHaveBeenCalledWith(expect.stringContaining("prime-agent config [-l]"));
+	});
+
 	it("separates Prime Agent updates from package updates", async () => {
 		await handlePublicCommand(["update", "--force"]);
 		await handlePublicCommand(["package", "update"]);
