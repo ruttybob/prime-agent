@@ -4,6 +4,12 @@
 
 - Added `reasoning_effort` control for all Z.AI reasoning models, exposing five thinking levels (`off`, `low`, `medium`, `high`, `max`) in the `/effort` selector.
 
+## [0.7.3] - 2026-08-17
+
+- Added provider-derived reasoning levels for OpenRouter and Prime Inference models, including sparse, mandatory, toggle-only, and explicit-off capabilities.
+- Added Qwen 3.8 Max to the featured Prime Inference catalog ([#1247](https://github.com/PrimeIntellect-ai/prime-agent/pull/1247) by [@eliebak](https://github.com/eliebak)).
+- Refreshed generated provider catalogs, removed retired routes, and aligned provider defaults and cross-provider handoff fixtures with models currently served.
+
 ## [0.7.2] - 2026-08-11
 
 ## [0.7.1] - 2026-08-07

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { deleteSessionFile, sweepGhostSessionFiles } from "../src/core/session-file-actions.js";
+import { deleteSessionArtifacts, deleteSessionFile } from "../src/core/session-file-actions.js";
 
 let root = "";
 
@@ -62,6 +62,18 @@ describe("deleteSessionFile removes the session artifact directory", () => {
 		expect(existsSync(artifactDir)).toBe(false);
 	});
 
+	it("never removes the artifacts root for a degenerate session file name", async () => {
+		const sessionsDir = join(root, "sessions");
+		mkdirSync(sessionsDir, { recursive: true });
+		const artifactsRoot = join(root, "session-artifacts");
+		mkdirSync(join(artifactsRoot, "live-session"), { recursive: true });
+
+		// Basename ".jsonl" strips to an empty id, which would resolve to the root.
+		await deleteSessionArtifacts(join(sessionsDir, ".jsonl"));
+
+		expect(existsSync(join(artifactsRoot, "live-session"))).toBe(true);
+	});
+
 	it("succeeds when the session has no artifact directory", async () => {
 		const sessionsDir = join(root, "sessions");
 		mkdirSync(sessionsDir, { recursive: true });
@@ -70,44 +82,5 @@ describe("deleteSessionFile removes the session artifact directory", () => {
 
 		const result = await deleteSessionFile(sessionPath);
 		expect(result.ok).toBe(true);
-	});
-
-	it("sweepGhostSessionFiles removes empty draft sessions and preserves real ones", async () => {
-		const sessionsDir = join(root, "sessions");
-		mkdirSync(sessionsDir, { recursive: true });
-
-		// Ghost: only bootstrap entries + session_state.
-		const ghostPath = join(sessionsDir, "ghost.jsonl");
-		writeFileSync(
-			ghostPath,
-			`${[
-				'{"type":"session","version":3,"id":"ghost"}',
-				'{"type":"model_change","id":"a","parentId":null}',
-				'{"type":"thinking_level_change","id":"b","parentId":"a"}',
-				'{"type":"service_tier_change","id":"c","parentId":"b"}',
-				'{"type":"session_state","id":"d","parentId":"c","state":{"status":"active"}}',
-			].join("\n")}\n`,
-		);
-
-		// Real session: has a user message.
-		const realPath = join(sessionsDir, "real.jsonl");
-		writeFileSync(
-			realPath,
-			`${[
-				'{"type":"session","version":3,"id":"real"}',
-				'{"type":"model_change","id":"a","parentId":null}',
-				'{"type":"message","id":"b","parentId":"a","message":{"role":"user","content":"hi"}}',
-			].join("\n")}\n`,
-		);
-
-		const swept = await sweepGhostSessionFiles(sessionsDir);
-		expect(swept).toBe(1);
-		expect(existsSync(ghostPath)).toBe(false);
-		expect(existsSync(realPath)).toBe(true);
-	});
-
-	it("sweepGhostSessionFiles is a no-op for a missing directory", async () => {
-		const swept = await sweepGhostSessionFiles(join(root, "does-not-exist"));
-		expect(swept).toBe(0);
 	});
 });
