@@ -82,6 +82,10 @@ async function runCli(
 			PRIME_AGENT_INTERNAL_DAEMON_WORKER_RECOVERY_JOURNAL: undefined,
 			RLM_DEPTH: undefined,
 			RLM_MAX_DEPTH: undefined,
+			// Both flags together (agent-driven runs) make Node emit a stderr
+			// warning that stderr-cleanliness assertions would fail on.
+			NO_COLOR: undefined,
+			FORCE_COLOR: undefined,
 			...options.environment,
 		},
 		stdio: ["pipe", "pipe", "pipe"],
@@ -114,8 +118,13 @@ async function runRpc(
 	commands: unknown[],
 	options: { trailingNewline?: boolean } = {},
 ): Promise<{ stdout: object[]; stderr: string }> {
+	const rpcEnv: NodeJS.ProcessEnv = { ...process.env, TSX_TSCONFIG_PATH: repoTsconfigPath };
+	// A test runner that sets both flags (agent-driven runs) makes Node emit a
+	// stderr warning that these stderr-cleanliness assertions would fail on.
+	delete rpcEnv.NO_COLOR;
+	delete rpcEnv.FORCE_COLOR;
 	const child = spawn(process.execPath, [tsxPath, fixturePath], {
-		env: { ...process.env, TSX_TSCONFIG_PATH: repoTsconfigPath },
+		env: rpcEnv,
 		stdio: ["pipe", "pipe", "pipe"],
 	});
 	children.add(child);

@@ -23,6 +23,7 @@ import {
 	persistDaemonStartupFenceFromOwner,
 	waitForDaemonStartupFence,
 } from "../../../src/modes/daemon/daemon-supervisor-ownership.js";
+import { createRootDaemonEnv } from "../../daemon-spawn-env.js";
 import { createHarness, type Harness } from "../harness.js";
 
 type FixtureMessage =
@@ -172,14 +173,13 @@ function spawnRealSupervisor(
 		[tsxPath, cliPath, "--mode", "daemon", "--daemon-socket", paths.socketPath, "--offline"],
 		{
 			cwd: paths.agentDir,
-			env: {
-				...process.env,
+			env: createRootDaemonEnv({
 				...extraEnv,
 				[supervisorRegistryDirEnv]: paths.registryDir,
 				[ENV_AGENT_DIR]: paths.agentDir,
 				PI_OFFLINE: "1",
 				TSX_TSCONFIG_PATH: tsconfigPath,
-			},
+			}),
 			stdio: ["ignore", "pipe", "pipe"],
 		},
 	);
