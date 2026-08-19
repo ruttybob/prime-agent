@@ -107,6 +107,14 @@ function createTempDir(): string {
 
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
+	// Scrub real provider credentials so catalog assertions stay hermetic on dev machines with configured keys.
+	const scrubbedProviderEnv: Array<[string, string | undefined]> = [];
+	for (const name of Object.keys(process.env)) {
+		if (name.endsWith("_API_KEY") || name === "ANTHROPIC_OAUTH_TOKEN" || name === "ANTHROPIC_AUTH_TOKEN") {
+			scrubbedProviderEnv.push([name, process.env[name]]);
+			delete process.env[name];
+		}
+	}
 	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
 		api: options.api,
 		provider: options.provider,
@@ -229,6 +237,13 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		cleanup() {
 			session.dispose();
 			fauxProvider.unregister();
+			for (const [name, value] of scrubbedProviderEnv) {
+				if (value === undefined) {
+					delete process.env[name];
+				} else {
+					process.env[name] = value;
+				}
+			}
 			if (existsSync(tempDir)) {
 				// Spawned fixture processes may still be flushing their final registry
 				// writes; retry briefly instead of failing the suite on ENOTEMPTY.

@@ -109,7 +109,6 @@ export class FullscreenViewport {
 		let dockLines = dock;
 		const dockHeight = clippedFullscreenDockHeight(dockLines.length, height);
 		if (dockLines.length > dockHeight) {
-			// bottom of the dock (editor + footer) wins over widgets above it
 			dockLines = dockLines.slice(dockLines.length - dockHeight);
 		}
 		const windowHeight = height - dockLines.length;
@@ -159,7 +158,6 @@ export class FullscreenViewport {
 		return flipped ? { start: b, end: a } : { start: a, end: b };
 	}
 
-	// Per-line selected column span, or null when the line is outside the selection.
 	private selectionSpan(lineIndex: number, sel: { start: SelectionPoint; end: SelectionPoint }): ColumnSpan | null {
 		if (lineIndex < sel.start.line || lineIndex > sel.end.line) return null;
 		return {
@@ -753,7 +751,6 @@ export class FullscreenViewport {
 		height: number,
 		cursorPos: { row: number; col: number } | null,
 	): void {
-		// over-tall frames (overlay overflow) show their bottom `height` lines
 		if (frame.length > height) {
 			frame = frame.slice(frame.length - height);
 		}

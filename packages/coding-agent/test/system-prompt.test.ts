@@ -49,6 +49,20 @@ describe("buildRlmPrompt", () => {
 		expect(prompt).toContain("Each `%%bash` cell runs in a throw-away subshell");
 	});
 
+	test("keeps the nonblocking long-running-work guidance without the unshipped async shell helper", () => {
+		const prompt = buildRlmPrompt({
+			cwd: "/repo",
+			messagesPath: "/repo/.pi/sessions/session.jsonl",
+			installedSkills: ["websearch"],
+		});
+
+		expect(prompt).toContain(
+			"use a nonblocking control loop: start the work, record its handle or output location, then end your turn",
+		);
+		expect(prompt).not.toContain("async `bash()` helper");
+		expect(prompt).not.toContain("managed job with a durable receipt");
+	});
+
 	test("discovers requested models through a bounded authenticated host search", () => {
 		const prompt = buildRlmPrompt({
 			cwd: "/repo",
