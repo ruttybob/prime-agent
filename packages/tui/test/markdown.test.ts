@@ -1280,7 +1280,7 @@ bar`,
 });
 
 describe("Markdown transform", () => {
-	it("transform receives raw text and content width", () => {
+	it("transform receives tab-normalized text and content width", () => {
 		let receivedText = "";
 		let receivedWidth = 0;
 		const transform = (text: string, width: number): string => {

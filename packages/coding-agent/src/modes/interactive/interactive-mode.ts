@@ -1793,7 +1793,7 @@ export class InteractiveMode {
 		return createMermaidMarkdownTransformer({
 			getMode: () => this.settingsManager.getMermaidRenderingMode(),
 			theme: {
-				fg: (color, text) => theme.fg(color as ThemeColor, text),
+				fg: (color, text) => theme.fg(color, text),
 				bold: (text) => theme.bold(text),
 			},
 		});

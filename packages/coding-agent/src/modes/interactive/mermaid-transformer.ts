@@ -1,4 +1,5 @@
 import { type MermaidArt, render as renderMermaid, type Span } from "grok-mermaid";
+import type { ThemeColor } from "./theme/theme.js";
 
 /**
  * Mermaid rendering modes.
@@ -8,7 +9,7 @@ import { type MermaidArt, render as renderMermaid, type Span } from "grok-mermai
 export type MermaidRenderingMode = "off" | "streaming";
 
 export interface MermaidTransformerTheme {
-	fg: (color: string, text: string) => string;
+	fg: (color: ThemeColor, text: string) => string;
 	bold: (text: string) => string;
 }
 

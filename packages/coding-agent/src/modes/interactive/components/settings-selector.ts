@@ -442,6 +442,7 @@ export class SettingsSelectorComponent extends Container {
 			currentValue: config.mermaidRenderingMode,
 			values: ["streaming", "off"],
 		});
+
 		this.addChild(new DynamicBorder());
 
 		this.settingsList = new SettingsList(
