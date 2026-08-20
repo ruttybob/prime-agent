@@ -4,6 +4,8 @@
 
 - Added `reasoning_effort` control for all Z.AI reasoning models, exposing five thinking levels (`off`, `low`, `medium`, `high`, `max`) in the `/effort` selector.
 
+## [0.7.4] - 2026-08-19
+
 ## [0.7.3] - 2026-08-17
 
 - Added provider-derived reasoning levels for OpenRouter and Prime Inference models, including sparse, mandatory, toggle-only, and explicit-off capabilities.
