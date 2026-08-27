@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.8.0] - 2026-08-21
 
 - Added an optional `MarkdownOptions.transform` callback to the Markdown component for pre-processing raw text before parsing.
 - Added double-click word selection, triple-click line selection, and word-granularity drag selection in the fullscreen TUI.

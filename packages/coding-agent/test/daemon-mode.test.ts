@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	AGENT_FAMILY_REACH_ERROR,
 	type AgentSessionMessageController,
+	createAgentMessageHostHandlers,
 	DEFAULT_AGENT_MESSAGE_MAX_CHARS,
 	sessionNameReservationKey,
 } from "../src/core/agent-messages.js";
@@ -180,6 +181,102 @@ describe("daemon mode helpers", () => {
 		expect(firstResolve).toHaveBeenCalledWith({ cancelled: true });
 		expect(secondResolve).toHaveBeenCalledWith({ cancelled: true });
 		expect(secondClient.attachedActiveSessionIds.has("active")).toBe(false);
+	});
+
+	it("releases owner-scoped ACP MCP config when its daemon client detaches", async () => {
+		const daemon = new AgentDaemon("/tmp/prime-agent-acp-owner.sock", {
+			defaultSessionConfig: { agentDir: "/tmp/prime-agent-test-agent", cwd: "/tmp" },
+			createRuntime: vi.fn(),
+		});
+		const owner = makeClient("owner", "active");
+		const other = makeClient("other", "active");
+		const replaceAcpMcpServers = vi.fn();
+		const releaseAcpMcpServers = vi.fn(async () => {});
+		const state = makeState("active");
+		state.clientEnv = {};
+		state.clients.add(owner);
+		state.clients.add(other);
+		state.extensionUiRequests = new Map();
+		state.runtime = {
+			...state.runtime,
+			session: {
+				isStreaming: false,
+				replaceAcpMcpServers,
+				releaseAcpMcpServers,
+				acquireSessionInputPause: () => ({ release: vi.fn() }),
+			},
+		} as never;
+		const internals = daemon as unknown as {
+			sessions: Map<string, ActiveSessionState>;
+			handleCommand(client: DaemonSocketClient, command: DaemonCommand): Promise<DaemonOutbound | undefined>;
+			detachClientFromSession(client: DaemonSocketClient, state: ActiveSessionState): void;
+			write: ReturnType<typeof vi.fn>;
+		};
+		internals.sessions.set(state.activeSessionId, state);
+		internals.write = vi.fn();
+
+		replaceAcpMcpServers.mockImplementationOnce(() => {
+			throw new Error("replacement failed");
+		});
+		await expect(
+			internals.handleCommand(owner, {
+				type: "replace_acp_mcp_servers",
+				activeSessionId: state.activeSessionId,
+				ownerId: "owner-token",
+				servers: [{ name: "failed", type: "http", url: "https://failed.example/mcp", headers: {} }],
+			}),
+		).rejects.toThrow("replacement failed");
+		expect(releaseAcpMcpServers).toHaveBeenLastCalledWith("owner-token", ["failed"]);
+
+		await internals.handleCommand(owner, {
+			type: "replace_acp_mcp_servers",
+			activeSessionId: state.activeSessionId,
+			ownerId: "owner-token",
+			servers: [{ name: "task", type: "http", url: "https://task.example/mcp", headers: {} }],
+		});
+		const releaseCount = releaseAcpMcpServers.mock.calls.length;
+		(state.runtime.session as unknown as { isStreaming: boolean }).isStreaming = true;
+		await expect(
+			internals.handleCommand(owner, {
+				type: "replace_acp_mcp_servers",
+				activeSessionId: state.activeSessionId,
+				ownerId: "owner-token",
+				servers: [{ name: "next", type: "http", url: "https://next.example/mcp", headers: {} }],
+			}),
+		).rejects.toThrow("while the agent is running");
+		expect(releaseAcpMcpServers).toHaveBeenCalledTimes(releaseCount);
+		(state.runtime.session as unknown as { isStreaming: boolean }).isStreaming = false;
+
+		await expect(
+			internals.handleCommand(other, {
+				type: "replace_acp_mcp_servers",
+				activeSessionId: state.activeSessionId,
+				ownerId: "other-token",
+				servers: [{ name: "other", type: "http", url: "https://other.example/mcp", headers: {} }],
+			}),
+		).rejects.toThrow("owned by another daemon client");
+
+		internals.detachClientFromSession(owner, state);
+		expect(releaseAcpMcpServers).toHaveBeenCalledWith("owner-token", ["task"]);
+
+		await internals.handleCommand(other, {
+			type: "replace_acp_mcp_servers",
+			activeSessionId: state.activeSessionId,
+			ownerId: "other-token",
+			servers: [{ name: "other", type: "http", url: "https://other.example/mcp", headers: {} }],
+		});
+		expect(replaceAcpMcpServers).toHaveBeenLastCalledWith(
+			[{ name: "other", type: "http", url: "https://other.example/mcp", headers: {} }],
+			"other-token",
+		);
+
+		await internals.handleCommand(other, {
+			type: "replace_acp_mcp_servers",
+			activeSessionId: state.activeSessionId,
+			ownerId: "other-token",
+			servers: [],
+		});
+		expect(releaseAcpMcpServers).toHaveBeenLastCalledWith("other-token", ["other"]);
 	});
 
 	it("cancels pending extension UI requests directly", () => {
@@ -1342,7 +1439,7 @@ describe("daemon mode helpers", () => {
 		expect(internals.closingSessions.has(state.activeSessionId)).toBe(false);
 	});
 
-	it("lists and routes agent messages to peers hosted by another worker", async () => {
+	it("lists and role-addresses root siblings hosted by another worker", async () => {
 		const daemon = new AgentDaemon("/tmp/prime-agent-worker-test.sock", {
 			defaultSessionConfig: { agentDir: "/tmp/prime-agent-test-agent", cwd: "/tmp" },
 			createRuntime: async () => {
@@ -1378,13 +1475,8 @@ describe("daemon mode helpers", () => {
 			createAgentMessageListResult(
 				current: ActiveSessionState,
 			): Promise<{ agents: Array<{ activeSessionId: string }> }>;
+			createAgentMessageController(getCurrentState: () => ActiveSessionState): AgentSessionMessageController;
 			sendRemoteAgentSessionMessage: typeof sendRemoteAgentSessionMessage;
-			sendAgentSessionMessage(options: {
-				targetSelector: string;
-				message: string;
-				fromState: ActiveSessionState;
-				origin: "agent";
-			}): Promise<unknown>;
 		};
 		internals.sessions.set(source.activeSessionId, source);
 		internals.remoteAgentPeers.set(remoteSelector, {
@@ -1401,15 +1493,29 @@ describe("daemon mode helpers", () => {
 		expect((await internals.createAgentMessageListResult(source)).agents).toContainEqual(
 			expect.objectContaining({ activeSessionId: remoteSelector }),
 		);
-		await expect(
-			internals.sendAgentSessionMessage({
-				targetSelector: remoteSelector,
-				message: "continue remotely",
-				fromState: source,
-				origin: "agent",
-			}),
-		).resolves.toEqual(receipt);
-		expect(sendRemoteAgentSessionMessage).toHaveBeenCalledWith(source, remoteSelector, "continue remotely");
+		const listAll = vi.spyOn(SessionManager, "listAll").mockResolvedValue([]);
+		try {
+			const handlers = createAgentMessageHostHandlers(internals.createAgentMessageController(() => source));
+			const roster = await handlers["agent_message.list_agents"]!({});
+			expect(roster.current).toMatchObject({ name: "Source", id: "session-source", depth: 0 });
+			expect(roster.entries).toContainEqual({
+				relationship: "sibling",
+				name: "Remote",
+				id: "session-remote",
+				depth: 0,
+				status: "idle",
+			});
+			await expect(
+				handlers["agent_message.send"]!({
+					message: "continue remotely",
+					receiver_role: "sibling",
+					receiver_name: "Remote",
+				}),
+			).resolves.toEqual(receipt);
+			expect(sendRemoteAgentSessionMessage).toHaveBeenCalledWith(source, "session-remote", "continue remotely");
+		} finally {
+			listAll.mockRestore();
+		}
 	});
 
 	it("routes nonresident agent-message targets through the supervisor wake path", async () => {
