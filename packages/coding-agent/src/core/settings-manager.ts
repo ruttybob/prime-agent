@@ -60,7 +60,7 @@ export interface ThinkingBudgetsSettings {
 	high?: number;
 }
 
-export type MermaidRenderingMode = "off" | "streaming";
+export type MermaidRenderingMode = "off" | "final" | "streaming";
 
 export interface MarkdownSettings {
 	codeBlockIndent?: string; // default: "  "
@@ -236,11 +236,23 @@ export class FileSettingsStorage implements SettingsStorage {
 		const maxAttempts = 10;
 		const delayMs = 20;
 		let lastError: unknown;
+		let compromisedError: Error | undefined;
 
 		for (let attempt = 1; attempt <= maxAttempts; attempt++) {
 			try {
-				return lockfile.lockSync(path, { realpath: false });
+				const release = lockfile.lockSync(path, {
+					realpath: false,
+					onCompromised: (error) => {
+						compromisedError ??= error;
+					},
+				});
+				if (compromisedError) {
+					release();
+					throw compromisedError;
+				}
+				return release;
 			} catch (error) {
+				if (compromisedError) throw compromisedError;
 				const code =
 					typeof error === "object" && error !== null && "code" in error
 						? String((error as { code?: unknown }).code)
@@ -463,6 +475,13 @@ export class SettingsManager {
 			(typeof settings.telemetry !== "object" || settings.telemetry === null || Array.isArray(settings.telemetry))
 		) {
 			delete settings.telemetry;
+		}
+
+		if (
+			settings.markdown !== undefined &&
+			(typeof settings.markdown !== "object" || settings.markdown === null || Array.isArray(settings.markdown))
+		) {
+			delete settings.markdown;
 		}
 
 		return settings as Settings;
@@ -1287,13 +1306,12 @@ export class SettingsManager {
 	}
 
 	getMermaidRenderingMode(): MermaidRenderingMode {
-		return this.settings.markdown?.mermaid ?? "streaming";
+		const mode = this.settings.markdown?.mermaid;
+		return mode === "off" || mode === "final" ? mode : "streaming";
 	}
 
 	setMermaidRenderingMode(mode: MermaidRenderingMode): void {
-		if (!this.globalSettings.markdown) {
-			this.globalSettings.markdown = {};
-		}
+		this.globalSettings.markdown ??= {};
 		this.globalSettings.markdown.mermaid = mode;
 		this.markModified("markdown", "mermaid");
 		this.save();

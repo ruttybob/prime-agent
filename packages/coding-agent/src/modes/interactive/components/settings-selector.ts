@@ -46,6 +46,7 @@ export interface SettingsConfig {
 	currentTheme: string;
 	availableThemes: string[];
 	hideThinkingBlock: boolean;
+	mermaidRenderingMode: MermaidRenderingMode;
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	showHardwareCursor: boolean;
 	editorPaddingX: number;
@@ -54,7 +55,6 @@ export interface SettingsConfig {
 	clearOnShrink: boolean;
 	showTerminalProgress: boolean;
 	fullscreen: boolean;
-	mermaidRenderingMode: MermaidRenderingMode;
 	warnings: WarningSettings;
 }
 
@@ -73,6 +73,7 @@ export interface SettingsCallbacks {
 	onThemeChange: (theme: string) => void;
 	onThemePreview?: (theme: string) => void;
 	onHideThinkingBlockChange: (hidden: boolean) => void;
+	onMermaidRenderingModeChange: (mode: MermaidRenderingMode) => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
 	onEditorPaddingXChange: (padding: number) => void;
@@ -81,7 +82,6 @@ export interface SettingsCallbacks {
 	onClearOnShrinkChange: (enabled: boolean) => void;
 	onShowTerminalProgressChange: (enabled: boolean) => void;
 	onFullscreenChange: (enabled: boolean) => void;
-	onMermaidRenderingModeChange: (mode: MermaidRenderingMode) => void;
 	onWarningsChange: (warnings: WarningSettings) => void;
 	onCancel: () => void;
 }
@@ -243,6 +243,13 @@ export class SettingsSelectorComponent extends Container {
 				description: "Hide thinking blocks in assistant responses",
 				currentValue: config.hideThinkingBlock ? "true" : "false",
 				values: ["true", "false"],
+			},
+			{
+				id: "mermaid-rendering",
+				label: "Mermaid diagrams",
+				description: "Render Mermaid code blocks as Unicode diagrams",
+				currentValue: config.mermaidRenderingMode,
+				values: ["off", "final", "streaming"],
 			},
 			{
 				id: "quiet-startup",
@@ -433,16 +440,6 @@ export class SettingsSelectorComponent extends Container {
 			values: ["true", "false"],
 		});
 
-		// Mermaid rendering toggle (insert after fullscreen)
-		const fullscreenIndex = items.findIndex((item) => item.id === "fullscreen");
-		items.splice(fullscreenIndex + 1, 0, {
-			id: "mermaid-rendering",
-			label: "Mermaid rendering",
-			description: "Render Mermaid diagrams as Unicode box-drawing art in chat",
-			currentValue: config.mermaidRenderingMode,
-			values: ["streaming", "off"],
-		});
-
 		this.addChild(new DynamicBorder());
 
 		this.settingsList = new SettingsList(
@@ -484,6 +481,9 @@ export class SettingsSelectorComponent extends Container {
 					case "hide-thinking":
 						callbacks.onHideThinkingBlockChange(newValue === "true");
 						break;
+					case "mermaid-rendering":
+						callbacks.onMermaidRenderingModeChange(newValue as MermaidRenderingMode);
+						break;
 					case "quiet-startup":
 						callbacks.onQuietStartupChange(newValue === "true");
 						break;
@@ -509,9 +509,6 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "fullscreen":
 						callbacks.onFullscreenChange(newValue === "true");
-						break;
-					case "mermaid-rendering":
-						callbacks.onMermaidRenderingModeChange(newValue as MermaidRenderingMode);
 						break;
 				}
 			},

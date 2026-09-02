@@ -24,6 +24,7 @@ const config: SettingsConfig = {
 	currentTheme: "dark",
 	availableThemes: ["dark"],
 	hideThinkingBlock: false,
+	mermaidRenderingMode: "streaming",
 	treeFilterMode: "user-only",
 	showHardwareCursor: false,
 	editorPaddingX: 0,
@@ -32,7 +33,6 @@ const config: SettingsConfig = {
 	clearOnShrink: false,
 	showTerminalProgress: false,
 	fullscreen: true,
-	mermaidRenderingMode: "streaming",
 	warnings: {},
 };
 
@@ -50,6 +50,7 @@ const callbacks: SettingsCallbacks = {
 	onThinkingLevelChange: () => {},
 	onThemeChange: () => {},
 	onHideThinkingBlockChange: () => {},
+	onMermaidRenderingModeChange: () => {},
 	onTreeFilterModeChange: () => {},
 	onShowHardwareCursorChange: () => {},
 	onEditorPaddingXChange: () => {},
@@ -58,7 +59,6 @@ const callbacks: SettingsCallbacks = {
 	onClearOnShrinkChange: () => {},
 	onShowTerminalProgressChange: () => {},
 	onFullscreenChange: () => {},
-	onMermaidRenderingModeChange: () => {},
 	onWarningsChange: () => {},
 	onCancel: () => {},
 };

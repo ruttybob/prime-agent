@@ -141,18 +141,6 @@ export interface DefaultTextStyle {
 }
 
 /**
- * Optional configuration for the Markdown component.
- */
-export interface MarkdownOptions {
-	/**
-	 * Pre-processing callback applied to the raw text before the markdown parser runs.
-	 * Receives the raw text and the available content width (width minus horizontal padding).
-	 * The returned text is what gets parsed and rendered.
-	 */
-	transform?: (text: string, availableWidth: number) => string;
-}
-
-/**
  * Theme functions for markdown elements.
  * Each function takes text and returns styled text with ANSI codes.
  */
@@ -177,6 +165,11 @@ export interface MarkdownTheme {
 	mathBlock?: (text: string) => string;
 }
 
+export interface MarkdownOptions {
+	/** Transform source Markdown before parsing, with the exact width available for content. */
+	transform?: (markdown: string, availableWidth: number) => string;
+}
+
 interface InlineStyleContext {
 	applyText: (text: string) => string;
 	stylePrefix: string;
@@ -188,8 +181,8 @@ export class Markdown implements Component {
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
 	private theme: MarkdownTheme;
+	private options: MarkdownOptions;
 	private defaultStylePrefix?: string;
-	private options?: MarkdownOptions;
 
 	private cachedText?: string;
 	private cachedWidth?: number;
@@ -214,7 +207,7 @@ export class Markdown implements Component {
 		this.paddingY = paddingY;
 		this.theme = theme;
 		this.defaultTextStyle = defaultTextStyle;
-		this.options = options;
+		this.options = options ? { ...options } : {};
 	}
 
 	setText(text: string): void {
@@ -243,8 +236,9 @@ export class Markdown implements Component {
 		}
 
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
+		const text = this.options.transform?.(this.text, contentWidth) ?? this.text;
 
-		if (!this.text || this.text.trim() === "") {
+		if (!text || text.trim() === "") {
 			const result: string[] = [];
 			this.selectionRegions = [];
 			this.cachedText = this.text;
@@ -253,12 +247,7 @@ export class Markdown implements Component {
 			return result;
 		}
 
-		let normalizedText = this.text.replace(/\t/g, "   ");
-
-		// Apply optional pre-processing transform before parsing
-		if (this.options?.transform) {
-			normalizedText = this.options.transform(normalizedText, contentWidth);
-		}
+		const normalizedText = text.replace(/\t/g, "   ");
 
 		// Parse markdown to HTML-like tokens
 		const tokens = pickMarkdownParser(normalizedText).lexer(normalizedText);
